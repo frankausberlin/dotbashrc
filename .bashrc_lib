@@ -1,0 +1,294 @@
+#!/bin/bash
+# make the .bashrc small again
+
+# Configurable variables
+NNN_TMPFILE_PATH="${XDG_CONFIG_HOME:-$HOME/.config}/nnn/.lastd"
+JUPYTER_DEFAULT_DIR="~/labor"
+JUPYTER_PORT=8888
+ADB_IP_PREFIX="192.168.178."
+EXPORTS_DIR="$HOME/.config/_exports"
+
+# nxx: Launches nnn file manager with cd on quit functionality.
+#
+# Usage: nxx [nnn_options]
+#
+# Parameters:
+#   nnn_options: Optional arguments passed to nnn command.
+#
+# Description: This function prevents nesting of nnn in subshells and sets up cd on quit by using NNN_TMPFILE.
+# If nnn is already running, it prints a message and returns.
+# After nnn exits, it sources the tmpfile to cd to the last directory and removes the file.
+#
+# Example:
+#   nxx -H  # Launch nnn with hidden files shown
+nxx () { # make alias function n for nnn: cd on quit
+    if ! command -v nnn >/dev/null 2>&1; then
+        echo "Error: nnn command not found." >&2
+        return 1
+    fi
+
+    # Block nesting of nnn in subshells
+    [ "${NNNLVL:-0}" -eq 0 ] || {
+        echo "nnn is already running"
+        return
+    }
+
+    # The behaviour is set to cd on quit (nnn checks if NNN_TMPFILE is set)
+    # If NNN_TMPFILE is set to a custom path, it must be exported for nnn to
+    # see. To cd on quit only on ^G, remove the "export" and make sure not to
+    # use a custom path, i.e. set NNN_TMPFILE *exactly* as follows:
+    #      NNN_TMPFILE="$NNN_TMPFILE_PATH"
+    export NNN_TMPFILE="$NNN_TMPFILE_PATH"
+
+    # Unmask ^Q (, ^V etc.) (if required, see `stty -a`) to Quit nnn
+    # stty start undef
+    # stty stop undef
+    # stty lwrap undef
+    # stty lnext undef
+
+    # The command builtin allows one to alias nnn to n, if desired, without
+    # making an infinitely recursive alias
+    command nnn -H "$@"
+    [ ! -f "$NNN_TMPFILE" ] || {
+        . "$NNN_TMPFILE"
+        rm -f -- "$NNN_TMPFILE" > /dev/null
+    }
+}
+
+# jl: Launches Jupyter Lab with custom configuration.
+#
+# Usage: jl [notebook_dir]
+#
+# Parameters:
+#   notebook_dir: Optional directory for notebooks. Defaults to JUPYTER_DEFAULT_DIR. Use "." for current directory.
+#
+# Description: Starts Jupyter Lab on localhost with specified port, allowing origin from colab, no browser, etc.
+#
+# Example:
+#   jl ~/my_notebooks  # Launch with custom directory
+jl () { # jupyter lab launcher
+    if ! command -v jupyter >/dev/null 2>&1; then
+        echo "Error: jupyter command not found." >&2
+        return 1
+    fi
+
+    echo -e '\e[105m' && python -c 'print(chr(35)*80)' && echo -e '\e[0m' && echo -e '\e[0m'
+    [ $# -eq 0 ] && __notebookdir="$JUPYTER_DEFAULT_DIR" || __notebookdir=$( [ "$1" = "." ] && pwd || echo "$1" )
+    echo -e "\n\e[103mJupyter Lab runing on\e[0m \e[1;3;34mhttp://localhost:$JUPYTER_PORT/lab/\e[0;0m\nSet notebook-dir to \e[1;3;34m$__notebookdir\e[0m\n" && \
+    echo -e '\e[105m' && python -c 'print(chr(35)*80)' &&  echo -e '\e[0m\n ' && \
+    jupyter lab \
+        --notebook-dir="$__notebookdir" \
+        --NotebookApp.allow_origin='https://colab.research.google.com' \
+        --port="$JUPYTER_PORT" \
+        --NotebookApp.port_retries=0 \
+        --allow-root \
+        --no-browser \
+        --NotebookApp.token='' \
+        --NotebookApp.disable_check_xsrf=True \
+        --NotebookApp.allow_credentials=True
+}
+
+# adx: Android Debug Bridge utility for managing connections and listing packages.
+#
+# Usage: adx [command]
+#
+# Commands:
+#   (no args): Show connected devices
+#   x: Disconnect all devices
+#   l: List packages on connected device
+#   l <nr>: List packages on device at ADB_IP_PREFIX.<nr>
+#   <nr>: Connect to device at ADB_IP_PREFIX.<nr>
+#   <nr> <str>: List packages on device <nr> filtered by <str>
+#   <str>: List packages on connected device filtered by <str>
+#
+# Parameters:
+#   nr: Device number (1-255)
+#   str: Filter string for package names
+#
+# Example:
+#   adx 5  # Connect to 192.168.178.5
+#   adx l browser  # List packages containing 'browser' on connected device
+adx () {
+    if ! command -v adb >/dev/null 2>&1; then
+        echo "Error: adb command not found. Please install Android Debug Bridge." >&2
+        return 1
+    fi
+
+    if [ "$#" -eq 0 ]; then
+        adb devices
+    else
+        if [ "$1" = 'x' ]; then
+            adb disconnect
+        else
+            if [ "$1" = 'l' ]; then
+                if [ "$#" -eq 1 ]; then
+                    adb shell pm list packages
+                else
+                    adb -s "192.168.178.$2" shell pm list packages
+                fi
+            else
+                if [[ "$1" =~ ^[0-9]+$ ]]; then
+                    if [ "$#" -eq 1 ]; then
+                        adb connect "$ADB_IP_PREFIX$1"
+                    else
+                        adb -s "$ADB_IP_PREFIX$1" shell pm list packages | grep -i "$2"
+                    fi
+                else
+                    adb shell pm list packages | grep -i "$1"
+                fi
+            fi
+        fi
+    fi
+}
+
+
+# exportadd: Adds a path to an environment variable, ensuring uniqueness.
+#
+# Usage: exportadd <PATH> [VARIABLE_NAME] [Position] [--dry-run]
+#
+# Parameters:
+#   PATH: The directory path to be added (required).
+#   VARIABLE_NAME: The name of the environment variable (default: PATH).
+#   Position: 'append' (to the end) or 'prepend' (to the beginning, default).
+#   --dry-run: Preview changes without applying them.
+#
+# Description: Checks if the path exists and is not already in the variable before adding.
+# Uses colon-separated paths for accurate matching.
+#
+# Examples:
+#   exportadd /usr/local/bin  # Prepend to PATH
+#   exportadd /opt/bin LD_LIBRARY_PATH append  # Append to LD_LIBRARY_PATH
+#   exportadd /home/user/bin --dry-run  # Preview adding to PATH
+exportadd() {
+    # 1. Parameter Check: Ensure a path was provided
+    if [ -z "$1" ]; then
+        echo "Error: A path must be specified (Parameter 1)." >&2
+        return 1
+    fi
+
+    local target_path="$1"
+    local var_name="${2:-PATH}" # Takes P2 or defaults to 'PATH'
+    local mode="${3:-prepend}"  # Takes P3 or defaults to 'prepend'
+    local dry_run=false
+
+    if [ "$4" = "--dry-run" ]; then
+        dry_run=true
+    fi
+
+    # Validate variable name
+    if ! [[ "$var_name" =~ ^[A-Z_][A-Z0-9_]*$ ]]; then
+        echo "Error: Invalid variable name '$var_name'." >&2
+        return 1
+    fi
+
+    # Validate mode
+    if [ "$mode" != "append" ] && [ "$mode" != "prepend" ]; then
+        echo "Error: Position must be 'append' or 'prepend'." >&2
+        return 1
+    fi
+
+    # Dynamically fetch the current value of the environment variable using indirect expansion
+    local current_var_value="${!var_name}"
+
+    # 2. Existence Check: Optional but recommended for PATH-like variables
+    if [ ! -d "$target_path" ]; then
+        # Silent return if the directory does not exist.
+        return 0
+    fi
+
+    # 3. Duplication Check: Check if the path is already contained in the variable
+    # We add colons to the search string to ensure clean matches (e.g., prevents matching "a/bin" in "b/a/bin")
+    case ":$current_var_value:" in
+        *":$target_path:"*)
+            # Path already present
+            if [ "$dry_run" = true ]; then
+                echo "Dry-run: Path '$target_path' already in $var_name"
+            fi
+            return 0
+            ;;
+        *)
+            # Path not found, now add it
+            if [ "$dry_run" = true ]; then
+                if [ "$mode" = "append" ]; then
+                    echo "Dry-run: Would append '$target_path' to $var_name"
+                else
+                    echo "Dry-run: Would prepend '$target_path' to $var_name"
+                fi
+            else
+                if [ "$mode" = "append" ]; then
+                    # Append the path to the END: VAR=OLD_VALUE:NEW_PATH
+                    export "$var_name"="$current_var_value:$target_path"
+                else
+                    # Prepend the path to the BEGINNING (Default): VAR=NEW_PATH:OLD_VALUE
+                    export "$var_name"="$target_path:$current_var_value"
+                fi
+            fi
+            return 0
+            ;;
+    esac
+}
+
+# exportfolder: Exports environment variables from files in EXPORTS_DIR.
+#
+# Usage: exportfolder [--dry-run]
+#
+# Parameters:
+#   --dry-run: Preview what would be exported without actually exporting.
+#
+# Description: Reads all files in EXPORTS_DIR, where filename is variable name and content is value.
+# Exports them and displays a formatted list.
+#
+# Examples:
+#   exportfolder  # Export variables from ~/.config/_exports/
+#   exportfolder --dry-run  # Preview what would be exported
+exportfolder () {
+    local dry_run=false
+    if [ "$1" = "--dry-run" ]; then
+        dry_run=true
+    fi
+
+    if ! command -v python >/dev/null 2>&1; then
+        echo "Error: python command not found." >&2
+        return 1
+    fi
+
+    # use all files in $HOME/.config/_exports as environment variables
+    # each file's name is the variable name and the file's content is the variable value
+
+    # Ensure a path was provided
+    if [ -z "$1" ]; then
+        echo "Error: A path must be specified." >&2
+        return 1
+    fi
+
+    # check if the directory exists
+    if [ ! -d "$EXPORTS_DIR" ]; then
+        echo "Directory $EXPORTS_DIR does not exist. No variables exported."
+        return 1
+    fi
+
+    # cosmetic output
+    python -c "import os; os.system('clear')"
+    python -c "print('_'*147+'\n'+'\x1b[106m_'*69+' exports '+'\x1b[106m_'*69+'\x1b[0m')"
+    # Loop through all files in the directory
+    count=-1
+    for file in "$EXPORTS_DIR"/*; do
+        ((count++)); ((count % 4 == 0 && count != 0)) && echo -n $'\n'
+        # Check if it's a regular file
+        if [ -f "$file" ]; then
+        # Extract the filename without the path
+        var_name=$(basename "$file")
+        # Read the file content
+        var_value=$(cat "$file")
+        # Export the variable or preview
+        if [ "$dry_run" = true ]; then
+            printf "Would export %-35s = %s\n" "$var_name" "$var_value"
+        else
+            export "$var_name"="$var_value"
+            # Print a message (optional)
+            printf "%-35s " "$var_name"
+        fi
+        fi
+    done
+    python -c "print('\n'+'\x1b[106m_'*147+'\x1b[0m')"
+}
