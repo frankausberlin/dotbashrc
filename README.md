@@ -178,3 +178,26 @@ We welcome contributions to improve Dotbashrc! Here's how to get involved:
 - Provide examples when possible
 
 Thank you for contributing to making AI/ML development more efficient!
+
+PS
+
+```shell
+#                 (re)create a data science environment with all the goodies and activate it
+# _______________________________________________________________________________________________________________________
+py=3.12 && ENV_NAME="ds${py: -2}" && mamba deactivate && mamba remove -y -n $ENV_NAME --all 2>/dev/null 
+mamba   create -y -n $ENV_NAME python=$py google-colab uv pytorch torchvision torchaudio tensorflow scikit-learn jax \
+        numba -c pytorch -c conda-forge && mamba activate $ENV_NAME
+uv pip  install -U jupyterlab jupyter_http_over_ws jupyter-ai[all] jupyterlab-github xeus-python shell-gpt llama-index \
+        langchain langchain-ollama langchain-openai langchain-community transformers[torch] evaluate accelerate \
+        google-genai nltk tf-keras rouge_score huggingface-hub datasets unstructured[all-docs] jupytext hrid fastai \
+        opencv-python soundfile librosa nbdev ollama setuptools wheel graphviz mcp PyPDF2 vllm \
+        ipywidgets==7.7.1 click==8.1.3
+jupyter labextension enable jupyter_http_over_ws && echo $ENV_NAME > ~/.startenv
+python  -m ipykernel install --user --name $ENV_NAME --display-name $ENV_NAME
+# _________________________insert_in_.bashrc_and_use_'act'_instead_of_'mamba_activate'___________________________________
+# mamba activate $(cat ~/.startenv)
+# act() { [ "$#" -ne 0 ] && echo $1 > .startenv && mamba activate $1; }
+```
+
+
+
